@@ -51,7 +51,20 @@ The **Colors** tab has six colours: accent, text, secondary text, glass tint, pl
 - **From steambrew.app:** open [Glass Dusk in the theme catalogue](https://steambrew.app/theme/0hs3xMU5Eb85uvIALzkq), press *Copy Theme ID* and paste it into Millennium → Themes → Install.
 - **By hand:** download this repository and put the folder into `Steam/millennium/themes/`, then pick it in Millennium → Themes.
 
-Tested on Windows 11 with Steam client 1788652215 and Millennium 3.5.0.
+Tested on Windows 11 with Steam client 1788652215 and Millennium 3.5.0, and on Ubuntu 24.04 with the fix below.
+
+### Linux
+
+If the game list has moved to the right but the top bar, the library and game pages still look like stock Steam, Millennium's web helper hook did not load. The theme is written against Steam's readable class names. Millennium (3.4.0 and newer) is what puts them back, and on Linux its installer links the hook from `/usr/lib/millennium`, which Steam's web helper cannot see from inside its container. Until that is fixed in Millennium, close Steam and replace the two links with copies:
+
+```bash
+cd ~/.steam/steam/ubuntu12_64
+rm -f libXtst.so.6 libmillennium_hhx64.so
+cp /usr/lib/millennium/libmillennium_bootstrap_hhx64.so libXtst.so.6
+cp /usr/lib/millennium/libmillennium_hhx64.so libmillennium_hhx64.so
+```
+
+Start Steam again, and repeat this after every Millennium update. It is for a regular Steam install with Millennium from its install script or the AUR (`ubuntu12_64` is Steam's own folder name on every distribution). NixOS keeps these files elsewhere, and Millennium does not support Steam from Flatpak or Snap.
 
 ## Good to know
 
@@ -80,3 +93,5 @@ Changes: [CHANGELOG.md](CHANGELOG.md). How the theme is put together: [DEVELOPME
 Тема для Steam на Millennium: димчасте скло поверх арту відкритої гри, а колір кнопок і виділень береться з цього арту. Стилізує бібліотеку, сторінку гри, крамницю, меню, Big Picture й оверлей у грі. Спільноту й профілі лишає такими, як їх малює Steam.
 
 Текст, який малює сама тема, за замовчуванням англійський. Українську вмикає налаштування **Theme language → Українська**. Решту налаштувань описано в таблиці вище, змінюються вони в Millennium → Themes → Glass Dusk → Settings і діють після перезапуску Steam.
+
+На Linux тема може застосуватися лише частково: список ігор переїхав праворуч, а шапка, бібліотека й сторінка гри лишилися як у звичайному Steam. Це означає, що не завантажився хук Millennium. Як це виправити, описано вище в розділі [Linux](#linux).
