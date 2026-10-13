@@ -2,6 +2,16 @@
 
 Versions follow [semantic versioning](https://semver.org). The repository starts at 1.2.0. The two earlier versions were built before it existed, and they are described from the development notes.
 
+## 1.6.4 — 2026-10-13
+
+**Library home**
+- New *Add shelf button* setting hides Steam's *Add shelf* control when wanted; it remains visible by default.
+- Restyled the recently played shelf to fit and centre its cards in the available space. Hovering or focusing a card shows a screenshot preview and playtime, using Steam store screenshots and local screenshots where available.
+- Hidden games are excluded from both the *Continue* card and recently played shelf.
+
+**Game list**
+- When the game list is on the right, its divider resizes the list from the window's right edge. The chosen width is remembered across Steam restarts.
+
 ## 1.6.3 — 2026-10-11
 
 **Library home**

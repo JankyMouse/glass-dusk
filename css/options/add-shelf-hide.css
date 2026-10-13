@@ -1,0 +1,4 @@
+/* Hide Steam's control for adding a shelf to the library. */
+html ._3SkuN_ykQuWGF94fclHdhJ,
+html div[class*="AddShelfContainer"],
+html button[class*="AddShelf"] { display: none !important; }

@@ -37,6 +37,7 @@ Millennium → Themes → Glass Dusk → ⋯ → Settings. Changes apply after S
 | Home numbers: second line | on · **off** | A small line under each number: games installed, games played, share of the library, average completion, drives. |
 | Recently played shelf | **on** · off | The row of recently played games under the *Continue* card. |
 | What's New shelf | on · **off** | Steam's What's New shelf on the home page. |
+| Add shelf button | **Show** · Hide | Whether Steam shows the control for adding a shelf to the library. |
 | Game list side | **Right** · Left | Where the game list sits. |
 | Big Picture | **Cover** · Steam | Whole-screen art of the focused game, or Big Picture untouched. |
 | Big Picture hours chip | **on** · off | Logo, hours played and last played at the top left. |

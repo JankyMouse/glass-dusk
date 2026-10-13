@@ -271,6 +271,101 @@
     return;
   }
 
+  // Steam's divider drag measures from the left edge. When Glass Dusk puts the
+  // game list on the right, resize that pane from the window's right edge instead.
+  let resizingList = null;
+  let resizePointer = null;
+  let resizeGrabOffset = 0;
+  let previousCursor = '';
+  let previousUserSelect = '';
+  const listWidthKey = 'gd-library-list-width';
+  const listMinWidth = 160;
+  let savedListWidth = null;
+  try {
+    const storedWidth = Number(localStorage.getItem(listWidthKey));
+    if (Number.isFinite(storedWidth) && storedWidth > 0) savedListWidth = storedWidth;
+  } catch (e) {
+    console.warn('[Glass Dusk] could not restore the library list width', e);
+  }
+  const rightList = layout => getComputedStyle(layout).flexDirection === 'row-reverse'
+    ? layout.querySelector(':scope > .LeftListSizableContainer')
+    : null;
+  const widthLimits = (layout, dividerWidth) => {
+    const width = layout.getBoundingClientRect().width;
+    const max = Math.min(width * 0.5, width - 400 - dividerWidth);
+    return { min: listMinWidth, max: Math.max(listMinWidth, max) };
+  };
+  const setListWidth = (list, width) => {
+    list.style.setProperty('flex', `0 0 ${width}px`, 'important');
+    list.style.setProperty('width', `${width}px`, 'important');
+  };
+  const restoreListWidth = () => {
+    if (savedListWidth === null) return;
+    document.querySelectorAll('[class*=LibraryDisplaySize]').forEach(layout => {
+      const list = rightList(layout);
+      const divider = layout.querySelector(':scope > .LibraryWindowDivider');
+      if (!list || !divider) return;
+      const { min, max } = widthLimits(layout, divider.getBoundingClientRect().width);
+      setListWidth(list, Math.max(min, Math.min(max, savedListWidth)));
+    });
+  };
+  const watchListWidth = () => {
+    restoreListWidth();
+    new MutationObserver(restoreListWidth).observe(document.body, { childList: true, subtree: true });
+  };
+  if (document.body) watchListWidth();
+  else addEventListener('DOMContentLoaded', watchListWidth, { once: true });
+  document.addEventListener('pointerdown', e => {
+    if (!isMain || e.button !== 0) return;
+    const divider = e.target.closest('.LibraryWindowDivider');
+    const layout = divider && divider.parentElement;
+    if (!layout) return;
+    const list = rightList(layout);
+    if (!list || list.parentElement !== layout) return;
+
+    const bounds = layout.getBoundingClientRect();
+    const dividerBounds = divider.getBoundingClientRect();
+    if (!bounds.width || !dividerBounds.width) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    resizingList = { list, layout, dividerWidth: dividerBounds.width };
+    resizePointer = e.pointerId;
+    resizeGrabOffset = e.clientX - dividerBounds.left;
+    previousCursor = document.body.style.cursor;
+    previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }, true);
+  document.addEventListener('pointermove', e => {
+    if (!resizingList || e.pointerId !== resizePointer) return;
+    e.preventDefault();
+    const { list, layout, dividerWidth } = resizingList;
+    const bounds = layout.getBoundingClientRect();
+    const { min, max } = widthLimits(layout, dividerWidth);
+    savedListWidth = Math.max(min, Math.min(
+      max,
+      bounds.right - (e.clientX - resizeGrabOffset) - dividerWidth
+    ));
+    setListWidth(list, savedListWidth);
+  }, true);
+  const finishListResize = e => {
+    if (!resizingList || (e && e.pointerId !== resizePointer)) return;
+    try {
+      localStorage.setItem(listWidthKey, String(savedListWidth || resizingList.list.getBoundingClientRect().width));
+    } catch (error) {
+      console.warn('[Glass Dusk] could not save the library list width', error);
+    }
+    resizingList = null;
+    resizePointer = null;
+    document.body.style.cursor = previousCursor;
+    document.body.style.userSelect = previousUserSelect;
+  };
+  document.addEventListener('pointerup', finishListResize, true);
+  document.addEventListener('pointercancel', finishListResize, true);
+  addEventListener('blur', () => finishListResize());
+
   const publish = (src, accent, ink) => {
     try {
       if (src) localStorage.setItem('gd-art', src); else localStorage.removeItem('gd-art');
@@ -342,6 +437,102 @@
     };
   };
 
+  const storeScreenshotCache = new Map();
+  const storeScreenshots = appid => {
+    if (!storeScreenshotCache.has(appid)) {
+      const request = fetch(`https://store.steampowered.com/api/appdetails?appids=${encodeURIComponent(appid)}`, {
+        credentials: 'include',
+      }).then(response => {
+        if (!response.ok) throw new Error(`Steam app details returned HTTP ${response.status}`);
+        return response.json();
+      }).then(result => {
+        const screenshots = result && result[String(appid)] && result[String(appid)].success &&
+          result[String(appid)].data && result[String(appid)].data.screenshots;
+        if (!Array.isArray(screenshots)) return [];
+        return [...new Set(screenshots.map(item => {
+          if (!item || typeof item !== 'object') return null;
+          const source = item.path_full || item.path_thumbnail;
+          if (typeof source !== 'string') return null;
+          try {
+            const url = new URL(source, 'https://store.steampowered.com');
+            return url.protocol === 'https:' && /\.(?:jpe?g|png|webp|avif)$/i.test(url.pathname) ? url.href : null;
+          } catch (error) {
+            return null;
+          }
+        }).filter(Boolean))].slice(0, 12);
+      });
+      storeScreenshotCache.set(appid, request);
+      request.catch(() => storeScreenshotCache.delete(appid));
+    }
+    return storeScreenshotCache.get(appid);
+  };
+
+  const localScreenshotUrl = url => {
+    if (typeof url !== 'string' || !url) return null;
+    return /^https?:\/\//i.test(url) ? url : `https://steamloopback.host/${url.replace(/^\/+/, '')}`;
+  };
+
+  let localScreenshotList = null;
+  const allLocalScreenshots = o => {
+    if (!localScreenshotList) {
+      localScreenshotList = (async () => {
+        const api = o.SteamClient.Screenshots;
+        const count = await api.GetAllAppsLocalScreenshotsCount();
+        const screenshots = [];
+        for (let start = 0; start < count; start += 1000) {
+          const end = Math.min(count - 1, start + 999);
+          const batch = await api.GetAllAppsLocalScreenshotsRange(start, end);
+          if (Array.isArray(batch)) screenshots.push(...batch);
+        }
+        return screenshots
+          .filter(item => item && item.hHandle !== undefined && item.clip_id === undefined && item.date_clipped === undefined)
+          .sort((a, b) => (b.nCreated || 0) - (a.nCreated || 0));
+      })();
+      localScreenshotList.catch(() => { localScreenshotList = null; });
+    }
+    return localScreenshotList;
+  };
+
+  const localScreenshots = async (o, app) => {
+    const screenshots = await allLocalScreenshots(o);
+    return [...new Set(screenshots
+      .filter(item => String(item.strGameID) === String(app.appid))
+      .map(item => localScreenshotUrl(item.strUrl))
+      .filter(Boolean))].slice(0, 12);
+  };
+
+  const screenshotImageCache = new Map();
+  const preloadScreenshot = url => {
+    if (!screenshotImageCache.has(url)) {
+      const load = new Promise(resolve => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => resolve(null);
+        image.src = url;
+      }).then(image => {
+        if (!image) screenshotImageCache.delete(url);
+        return image;
+      });
+      screenshotImageCache.set(url, load);
+    }
+    return screenshotImageCache.get(url);
+  };
+
+  const recentScreenshotUrls = async (o, app) => {
+    const [store, personal] = await Promise.all([storeScreenshots(app.appid), localScreenshots(o, app)]);
+    return [...new Set([...store, ...personal])];
+  };
+
+  const preloadRecentScreenshots = (o, apps) => {
+    for (const app of apps) {
+      Promise.all([storeScreenshots(app.appid), localScreenshots(o, app)]).then(([store, personal]) => {
+        [...store.slice(0, 2), ...personal.slice(0, 2)].forEach(preloadScreenshot);
+      }).catch(error => {
+        console.warn('[Glass Dusk] could not preload game screenshots', error);
+      });
+    }
+  };
+
   // point an <img> at the first candidate that decodes; `none` runs when none does
   const chain = (img, urls, none) => {
     let i = 0;
@@ -386,11 +577,13 @@
 
   const lastPlayed = o => {
     const apps = installedApps(o);
-    const games = apps.filter(a => a.app_type === 1);
-    return (games.length ? games : apps)
+    const hidden = id => { try { return o.collectionStore.BIsHidden(id); } catch (e) { return false; } };
+    const games = apps.filter(a => a.app_type === 1 && !hidden(a.appid));
+    return (games.length ? games : apps.filter(a => !hidden(a.appid)))
       .filter(a => a.rt_last_time_played)
       .sort((a, b) => b.rt_last_time_played - a.rt_last_time_played)[0] || null;
   };
+
 
   const wantedArt = () => {
     const hero = heroElement();
@@ -671,6 +864,11 @@
   // checked at most every couple of seconds.
   let homeChecked = 0;
   let homeSig = '';
+  let recentShelfObserver = null;
+  let recentHoverCleanup = null;
+  const RECENT_CARD_WIDTH = 148;
+  const RECENT_CARD_GAP = 14;
+  const MAX_RECENT_GAMES = 11;
 
   // Space taken in every mounted Steam library folder: games, DLC, workshop
   // items, shader caches and staged updates — the parts Settings → Storage lists.
@@ -817,6 +1015,8 @@
     // switch «Library home → Steam» (css/options/home-steam.css)
     if (getComputedStyle(root).getPropertyValue('--gd-home').trim() === 'steam') {
       host.querySelectorAll('.gd-home').forEach(b => b.remove());
+      if (recentHoverCleanup) recentHoverCleanup();
+      recentHoverCleanup = null;
       homeSig = '';
       return;
     }
@@ -833,11 +1033,15 @@
     const last = lastPlayed(o);   // null when nothing installed has been played yet
     if (!games.length && !apps.length) return;
 
+
     // switch «Recently played shelf» (css/options/recent-hide.css)
     const rowOff = getComputedStyle(root).getPropertyValue('--gd-recent').trim() === 'off';
-    const shelf = !last || rowOff ? [] : apps.filter(a => a.rt_last_time_played && a.app_type === 1 && a.appid !== last.appid)
+    const hidden = id => { try { return o.collectionStore.BIsHidden(id); } catch (e) { return false; } };
+    const shelf = !last || rowOff ? [] : apps.filter(a => a.rt_last_time_played && a.app_type === 1 && a.appid !== last.appid && !hidden(a.appid))
       .sort((a, b) => b.rt_last_time_played - a.rt_last_time_played)
-      .slice(0, 7);
+      .slice(0, MAX_RECENT_GAMES);
+
+
     const minutes = games.reduce((s, a) => s + (a.minutes_playtime_forever || 0), 0);
     askDisk(o, apps.length);
     // until Steam answers, the installed apps' own sizes (no workshop items or shaders)
@@ -868,6 +1072,9 @@
       ...(last ? [last, ...shelf] : []).map(a => `${a.appid}:${a.rt_custom_image_mtime || 0}`)].join('|');
     if (existing && sig === homeSig) return;
     homeSig = sig;
+    preloadRecentScreenshots(o, shelf);
+    if (recentHoverCleanup) recentHoverCleanup();
+    recentHoverCleanup = null;
 
     const block = document.createElement('div');
     block.className = 'gd-home';
@@ -895,7 +1102,7 @@
       <h4 class="gd-label">${W().recent}</h4>
       <div class="gd-shelf">
         ${shelf.map(a => `
-          <button class="gd-cap" data-app="${a.appid}" title="${esc(a.display_name)}">
+          <button class="gd-cap" data-app="${a.appid}">
             <img alt="">
             <span>${relDay(a.rt_last_time_played)}</span>
           </button>`).join('')}
@@ -927,6 +1134,103 @@
       });
     });
 
+    const hoverCard = document.createElement('div');
+    hoverCard.className = 'gd-recent-hover';
+    hoverCard.setAttribute('role', 'tooltip');
+    hoverCard.hidden = true;
+    hoverCard.innerHTML = `
+      <img class="gd-recent-hover-art" alt="">
+      <div class="gd-recent-hover-shade"></div>
+      <div class="gd-recent-hover-info">
+        <strong class="gd-recent-hover-title"></strong>
+        <div class="gd-recent-hover-stats"></div>
+      </div>`;
+    let hoverTimer = 0;
+    let screenshotTimer = 0;
+    let hoveredAppId = null;
+    const hoverImage = hoverCard.querySelector('.gd-recent-hover-art');
+    const hoverTitle = hoverCard.querySelector('.gd-recent-hover-title');
+    const hoverStats = hoverCard.querySelector('.gd-recent-hover-stats');
+    const hideHover = () => {
+      clearTimeout(hoverTimer);
+      clearInterval(screenshotTimer);
+      hoverCard.hidden = true;
+      hoveredAppId = null;
+    };
+    recentHoverCleanup = () => {
+      hideHover();
+      hoverCard.remove();
+    };
+    const showHover = cap => {
+      const app = shelf.find(a => String(a.appid) === cap.dataset.app);
+      if (!app) return;
+      clearTimeout(hoverTimer);
+      clearInterval(screenshotTimer);
+      hoveredAppId = app.appid;
+      hoverTimer = setTimeout(() => {
+        if (hoveredAppId !== app.appid || !cap.isConnected) return;
+        hoverTitle.textContent = app.display_name;
+        const total = app.minutes_playtime_forever || 0;
+        const recent = app.minutes_playtime_last_two_weeks || 0;
+        hoverStats.innerHTML = `
+          <span>${esc(W().inGame)} <b>${hoursOf(total)}</b></span>
+          <span>${esc(W().inTwoWeeks)} <b>${hoursOf(recent)}</b></span>`;
+        const rect = cap.getBoundingClientRect();
+        const width = Math.min(336, window.innerWidth - 24);
+        const left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.left + rect.width / 2 - width / 2));
+        const above = rect.top - 232;
+        const top = above >= 12 ? above : Math.max(12, Math.min(window.innerHeight - 232, rect.bottom + 12));
+        hoverCard.style.left = `${left}px`;
+        hoverCard.style.top = `${top}px`;
+        hoverCard.hidden = false;
+        hoverImage.removeAttribute('src');
+        recentScreenshotUrls(o, app).then(screenshots => {
+            if (hoveredAppId !== app.appid) return;
+            if (!screenshots.length) return;
+            let nextIndex = 0;
+            const showNextScreenshot = () => {
+              if (hoveredAppId !== app.appid) return;
+              if (!screenshots.length) return;
+              const current = nextIndex;
+              nextIndex = (nextIndex + 1) % screenshots.length;
+              preloadScreenshot(screenshots[current]).then(image => {
+                if (hoveredAppId !== app.appid) return;
+                if (!image) {
+                  screenshots.splice(current, 1);
+                  if (!screenshots.length) {
+                    hoverImage.removeAttribute('src');
+                    return;
+                  }
+                  nextIndex %= screenshots.length;
+                  showNextScreenshot();
+                  return;
+                }
+                hoverImage.src = image.src;
+                screenshotTimer = setTimeout(showNextScreenshot, 3500);
+              });
+            };
+            showNextScreenshot();
+        }).catch(error => {
+          console.warn('[Glass Dusk] could not load recent-game screenshots', error);
+        });
+      }, 320);
+    };
+    block.addEventListener('pointerover', e => {
+      const cap = e.target.closest('.gd-cap');
+      if (cap && !cap.contains(e.relatedTarget)) showHover(cap);
+    });
+    block.addEventListener('pointerout', e => {
+      const cap = e.target.closest('.gd-cap');
+      if (cap && !cap.contains(e.relatedTarget)) hideHover();
+    });
+    block.addEventListener('focusin', e => {
+      const cap = e.target.closest('.gd-cap');
+      if (cap) showHover(cap);
+    });
+    block.addEventListener('focusout', e => {
+      if (e.target.closest('.gd-cap')) hideHover();
+    });
+
     block.addEventListener('click', e => {
       const play = e.target.closest('.gd-play');
       if (play) {
@@ -948,6 +1252,30 @@
 
     if (existing) existing.replaceWith(block);
     else anchor.insertBefore(block, anchor.firstElementChild);
+    document.body.appendChild(hoverCard);
+    if (recentShelfObserver) recentShelfObserver.disconnect();
+    const recentShelf = block.querySelector('.gd-shelf');
+    if (recentShelf) {
+      const fitRecentShelf = () => {
+        const capacity = Math.min(
+          MAX_RECENT_GAMES,
+          Math.floor((recentShelf.clientWidth + RECENT_CARD_GAP) / (RECENT_CARD_WIDTH + RECENT_CARD_GAP))
+        );
+        recentShelf.classList.toggle('gd-shelf-empty', capacity === 0);
+        const recentLabel = recentShelf.previousElementSibling;
+        if (recentLabel) {
+          recentLabel.hidden = capacity === 0;
+          const offset = Math.max(0, (recentShelf.clientWidth - capacity * RECENT_CARD_WIDTH - Math.max(0, capacity - 1) * RECENT_CARD_GAP) / 2);
+          recentLabel.style.setProperty('--gd-recent-label-offset', `${offset}px`);
+        }
+        Array.from(recentShelf.children).forEach((card, index) => { card.hidden = index >= capacity; });
+      };
+      recentShelfObserver = new ResizeObserver(fitRecentShelf);
+      recentShelfObserver.observe(recentShelf);
+      fitRecentShelf();
+    } else {
+      recentShelfObserver = null;
+    }
     state.home++;
   };
 

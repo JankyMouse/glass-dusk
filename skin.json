@@ -309,6 +309,22 @@
         }
       }
     },
+    "Add shelf button": {
+      "description": "Whether Steam shows the button for adding a shelf to the library.",
+      "tab": "Library",
+      "default": "Show",
+      "values": {
+        "Show": {},
+        "Hide": {
+          "TargetCss": {
+            "affects": [
+              "^Steam$"
+            ],
+            "src": "css/options/add-shelf-hide.css"
+          }
+        }
+      }
+    },
     "Game list side": {
       "description": "Where the game list sits.",
       "tab": "Library",
